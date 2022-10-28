@@ -21,8 +21,18 @@
 from machine import Pin, Timer, TouchPad
 from utime import sleep_ms
 import sys, select
+import json
 
-
+def do_connect(ssid,key):
+    import network
+    sta_if = network.WLAN(network.STA_IF)
+    if not sta_if.isconnected():
+        print('connecting to network...')
+        sta_if.active(True)
+        sta_if.connect(ssid, key)
+        while not sta_if.isconnected():
+            pass
+    print('network config:', sta_if.ifconfig())
 
 def initialize_robot(debug):
     """ Function to initialize the servos parameters and positions."""
@@ -243,7 +253,8 @@ def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect
 
 ############################################# MAIN PROGRAM ####################################################
 # global variables
-debug=False                   # boolean variable that enable/disable prints for debug purpose           
+debug=False                   # boolean variable that enable/disable prints for debug purpose
+network=True
 
 robot_init_status=False       # boolean to track the robot initialization status is initially set false
 sol_string_ready=False        # boolean to track the cube solution string readiness is initially set false
@@ -256,6 +267,13 @@ stop_btn=TouchPad(Pin(32))    # create the touch pad button object in GPIO 13
 flash=Timer(0)                # create a flash object on hardware timer
 flash.deinit()                # flash object is set disable
 
+if network:
+    with open('wifi.json', 'r') as openfile:
+        # Reading from json file
+        wifi=json.load(openfile)
+        do_connect(wifi['ssid'],wifi['key'])
+        import webrepl
+        webrepl.start(password='cube')
 
 if not robot_init_status:                          # case the robot is not initialized 
     robot_init_status=initialize_robot(debug)      # robot initialization function is called
