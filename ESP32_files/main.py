@@ -22,6 +22,7 @@ from machine import Pin, Timer, TouchPad
 from utime import sleep_ms
 import sys, select
 import json
+import time
 
 def do_connect(ssid,key):
     import network
@@ -33,6 +34,7 @@ def do_connect(ssid,key):
         while not sta_if.isconnected():
             pass
     print('network config:', sta_if.ifconfig())
+    return sta_if
 
 def initialize_robot(debug):
     """ Function to initialize the servos parameters and positions."""
@@ -132,8 +134,16 @@ def robot_solver(solution, debug, stop_btn, btn_ref):
     return robot_status, robot_time     # returned a string with the robot status, and an integer with robot time in secs
 
 
+def report_status(robot_status, connect_status, status_message, network_connection):
+    """formats a json status message and send it"""
+    status = {"robot_status": robot_status,
+              "connect_status": connect_status,
+              "status_message": status_message,
 
-
+              }
+    if network_connection is not None:
+        status["network"] = network_connection.ifconfig()
+    print(json.dumps(status))
 
 
 def solution_string(strMsg):
@@ -170,19 +180,20 @@ def flash_led(timer):
 
 ############################################# MAIN FUNCTION ####################################################
 
-def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect_status):
+def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect_status, status_interval,network_connection):
     """ This is substantially the main functio, with the largest communication part with the PC.
         When the cube solution string is available, then the robot solving modules are called
         For the communication it is used the same port the ESP32 uses for its programming, forcing a
         slightly creative mode to use the uart."""
     
     strMsg=''                             # string variable used to generate the received string
+    status_updated = time.ticks_ms()
     
     while True:                           # infinite loop
-        sleep_ms(20)                      # fix little delay, to prevent using much resorcuces from the microcontroller
-        if connect_status:                # case the conenction with the PC is established
+        sleep_ms(20)                      # fix little delay, to prevent using much resources from the microcontroller
+        if connect_status:                # case the connection with the PC is established
             led.on()                      # ESP32 led is turned on when the serial connection is established
-        elif not connect_status:          # case the conenction with the PC is not established
+        elif not connect_status:          # case the connection with the PC is not established
             led.off()                     # ESP32 led is turned off when the serial connection is dropped
         
         if 'solved' in robot_status:                        # case robot status includes the solved word  
@@ -196,8 +207,20 @@ def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect
   
         while sys.stdin in select.select([sys.stdin], [], [], 0)[0]:  # while case there is data on the uart buffer
             ch = sys.stdin.read(1).strip('\n')                        # one character is retrieved
+            
+            if '{' in ch:
+                jsonMsg = ''
 
-            if '[' in ch:                                             # case the character is an open square bracket (start of a message content)
+            # case the character is a close bracket (end of a json message)
+            elif '}' in ch:
+                try:
+                    j = json.loads(strMsg)
+                    cmd = j['command']
+                    param = j['command']
+                except ValueError:
+                    print("invalid json" + str(strMsg))
+
+            elif '[' in ch:                                           # case the character is an open square bracket (start of a message content)
                 strMsg=''                                             # string message variable used to generate the received string is emptied
             
             elif ']' in ch:                                           # case the character is a close square bracket (end of a message content)
@@ -245,7 +268,11 @@ def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect
 
             else:                    # case the caracter is not "[", nor "]", nor "<" and not ">"
                 strMsg=strMsg+ch     # the received character is added to the string message variable
-     
+        if (status_updated + status_interval) < time.ticks_ms():
+            status_updated = time.ticks_ms()
+            report_status(robot_status, connect_status,
+                          'none', network_connection)
+
 
 
 
@@ -254,27 +281,30 @@ def main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect
 ############################################# MAIN PROGRAM ####################################################
 # global variables
 debug=False                   # boolean variable that enable/disable prints for debug purpose
-network=True
+network_enable=True
+network_connection=None
 
 robot_init_status=False       # boolean to track the robot initialization status is initially set false
 sol_string_ready=False        # boolean to track the cube solution string readiness is initially set false
-robot_status=''               # string to track the robot status is initially set empty
+robot_status='ready'          # string to track the robot status is initially set empty
 connect_status=False          # boolean to track the connection status with the uart is initially set false
-
+status_interval = 10000       # ms between status message updates
 
 led = Pin(2, Pin.OUT)         # create the led object in GPIO 2  
 stop_btn=TouchPad(Pin(32))    # create the touch pad button object in GPIO 13
 flash=Timer(0)                # create a flash object on hardware timer
 flash.deinit()                # flash object is set disable
 
-if network:
+if network_enable:
     with open('wifi.json', 'r') as openfile:
         # Reading from json file
-        wifi=json.load(openfile)
-        do_connect(wifi['ssid'],wifi['key'])
+        wifi = json.load(openfile)
+        network_connection = do_connect(wifi['ssid'], wifi['key'])
+        do_connect(wifi['ssid'], wifi['key'])
         import webrepl
         webrepl.start(password='cube')
 
+report_status(robot_status, connect_status, 'initializing', network_connection)
 if not robot_init_status:                          # case the robot is not initialized 
     robot_init_status=initialize_robot(debug)      # robot initialization function is called
     for i in range(3):                             # iteration of three times
@@ -290,8 +320,10 @@ if not robot_init_status:                          # case the robot is not initi
     btn_ref=btn_ref//2000                          # button threshold reference is set at 50% the average value during previous iteration
     if debug:
         print("ref_stop_btn_value:",btn_ref)
+    robot_fun(debug)
+    report_status(robot_status, connect_status,
+                  'initialized', network_connection)
 
 # main loop
-main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref, connect_status)
-
-
+main_func(debug, robot_init_status, robot_status, stop_btn, btn_ref,
+          connect_status, status_interval, network_connection)
